@@ -177,6 +177,7 @@ class Inspection(TimestampMixin, Base):
     __tablename__ = "inspections"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scan_id: Mapped[int | None] = mapped_column(ForeignKey("scans.id"), index=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     status: Mapped[str] = mapped_column(String(40), default="ASSESSMENT_READY", nullable=False, index=True)
     final_outcome: Mapped[str | None] = mapped_column(String(50))
@@ -191,6 +192,7 @@ class Inspection(TimestampMixin, Base):
     observations: Mapped[list["InspectionObservation"]] = relationship(back_populates="inspection", cascade="all, delete-orphan")
     comments: Mapped[list["InspectionComment"]] = relationship(back_populates="inspection", cascade="all, delete-orphan")
     reports: Mapped[list["InspectionReport"]] = relationship(back_populates="inspection", cascade="all, delete-orphan")
+    scan: Mapped[Scan | None] = relationship()
 
 
 class InspectionFinding(TimestampMixin, Base):

@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = Field(
         default=30, validation_alias="ACCESS_TOKEN_EXPIRE_MINUTES"
     )
+    tesseract_cmd: str | None = Field(default=None, validation_alias="TESSERACT_CMD")
+    upload_dir: str = Field(default="uploads", validation_alias="UPLOAD_DIR")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
