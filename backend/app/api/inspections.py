@@ -24,9 +24,13 @@ def _get(db: Session, inspection_id: int) -> Inspection:
     return inspection
 
 
-def _finding_dict(finding: InspectionFinding) -> dict[str, Any]:
+def _finding_dict(
+    finding: InspectionFinding,
+    finding_number: int | None = None,
+) -> dict[str, Any]:
     return {
         "finding_id": finding.id,
+        "finding_number": finding_number,
         "source": finding.source,
         "category": finding.category,
         "title": finding.title,
@@ -64,9 +68,23 @@ def _inspection_dict(inspection: Inspection) -> dict[str, Any]:
 
 
 def _require_verified(inspection: Inspection) -> None:
-    if inspection.status != "VERIFIED":
-        raise HTTPException(status_code=409, detail="Officer-verified reports are available only after human verification")
+    pending_findings = [
+        finding
+        for finding in inspection.findings
+        if finding.source == "AI"
+        and finding.officer_decision is None
+    ]
 
+    if pending_findings:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Human verification still required for "
+                f"{len(pending_findings)} AI finding(s)."
+            ),
+        )
+
+    inspection.status = "VERIFIED"
 
 def _persist_report(db: Session, inspection: Inspection, officer: User, report: dict[str, Any], report_type: str, payload: bytes, mime_type: str, suffix: str) -> InspectionReport:
     report_data = jsonable_encoder(report)
@@ -111,8 +129,17 @@ def read_assessment(inspection_id: int, db: Session = Depends(get_db), officer: 
 
 
 @router.get("/inspections/{inspection_id}/findings")
-def read_findings(inspection_id: int, db: Session = Depends(get_db), officer: User = Depends(require_officer)) -> list[dict[str, Any]]:
-    return [_finding_dict(item) for item in _get(db, inspection_id).findings]
+def read_findings(
+    inspection_id: int,
+    db: Session = Depends(get_db),
+    officer: User = Depends(require_officer),
+) -> list[dict[str, Any]]:
+    findings = _get(db, inspection_id).findings
+
+    return [
+        _finding_dict(item, finding_number=index)
+        for index, item in enumerate(findings, start=1)
+    ]
 
 
 @router.post("/inspections/{inspection_id}/findings", status_code=status.HTTP_201_CREATED)

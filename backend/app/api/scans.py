@@ -27,6 +27,24 @@ def _field_value(value: Any) -> Any:
     return value.get("value") if isinstance(value, dict) else value
 
 
+def _resolve_product(db: Session, product_id: int | None, product_data: dict[str, Any]) -> Product:
+    if product_id not in (None, 0):
+        product = db.get(Product, product_id)
+        if product is None:
+            raise HTTPException(status_code=404, detail="Product not found")
+        return product
+
+    product = Product(
+        name=str(product_data.get("name") or product_data.get("product_name") or "Unidentified product"),
+        brand=product_data.get("brand"),
+        category=product_data.get("category"),
+        description=product_data.get("description"),
+    )
+    db.add(product)
+    db.flush()
+    return product
+
+
 @router.get("/")
 def scan_status() -> dict[str, str]:
     return {"message": "Scan endpoint accepts multipart package images."}
@@ -34,7 +52,7 @@ def scan_status() -> dict[str, str]:
 
 @router.post("", status_code=status.HTTP_201_CREATED)
 async def create_scan(
-    images: list[UploadFile] = File(...),
+    images: list[UploadFile] = File(..., json_schema_extra={"items": {"type": "string", "format": "binary"}}),
     product_data: str = Form(default="{}"),
     product_id: int | None = Form(default=None),
     db: Session = Depends(get_db),
@@ -49,7 +67,8 @@ async def create_scan(
     if not isinstance(supplied_product, dict):
         raise HTTPException(status_code=422, detail="product_data must be a JSON object")
 
-    scan = Scan(user_id=officer.id, product_id=product_id, status="ocr_processing")
+    product = _resolve_product(db, product_id, supplied_product)
+    scan = Scan(user_id=officer.id, product_id=product.id, status="ocr_processing")
     db.add(scan)
     db.flush()
     scan_dir = Path(settings.upload_dir) / "scans" / str(scan.id)
@@ -75,19 +94,21 @@ async def create_scan(
         db.add(ExtractedDeclaration(scan_id=scan.id, declaration_type=declaration_type, value=str(_field_value(value)), source_data={"ocr": value, "merged_text": ocr_result["merged_text"]}))
 
     candidate = _candidate_product(supplied_product, extracted, ocr_result["merged_text"])
-    if product_id is not None:
-        product = db.get(Product, product_id)
-        if product is None:
-            raise HTTPException(status_code=404, detail="Product not found")
-        candidate.setdefault("product_name", product.name)
-        candidate.setdefault("brand", product.brand)
-        candidate.setdefault("category", product.category)
+    candidate.setdefault("product_name", product.name)
+    candidate.setdefault("brand", product.brand)
+    candidate.setdefault("category", product.category)
     assessment = generate_initial_assessment(candidate)
     inspection = Inspection(scan_id=scan.id, user_id=officer.id, product_data=candidate, assessment_data=assessment, evidence_data=[{"source_image": str(path)} for path in paths])
     db.add(inspection)
     db.flush()
     for result in assessment["rule_results"]:
-        db.add(InspectionFinding(inspection_id=inspection.id, source="AI", category=result.get("category", "Other"), title=result.get("rule_title") or "OCR-assisted rule assessment", description=result.get("explanation") or "OCR-assisted rule assessment.", applicable_rule=result.get("rule_number"), original_ai_status=result.get("status"), ai_confidence=result.get("confidence"), ai_evidence=result.get("evidence"), status=result.get("status"), evidence_data=[]))
+        db.add(InspectionFinding(inspection_id=inspection.id, source="AI", category=result.get("category", "Other"), title=result.get("rule_title") or "OCR-assisted rule assessment", description=result.get("explanation") or "OCR-assisted rule assessment.", applicable_rule=result.get("rule_number"), original_ai_status=result.get("status"), ai_confidence=result.get("confidence"), ai_evidence=result.get("evidence"), status=result.get("status"), evidence_data=[
+    {
+        "source_image": str(path),
+        "filename": path.name,
+    }
+    for path in paths
+]))
     scan.status = "assessment_ready"
     db.commit()
     db.refresh(inspection)

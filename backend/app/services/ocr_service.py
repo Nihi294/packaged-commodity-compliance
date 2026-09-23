@@ -1,91 +1,134 @@
-"""Callable OCR/image-processing adapter based on Member 1's prototype."""
-
-from __future__ import annotations
-
+import pytesseract
+from PIL import Image
+import os
+import cv2
 import re
-from pathlib import Path
-from typing import Any, Callable
+from collections import defaultdict
+from app.services.declaration_extractor import extract_declarations
 
-try:
-    import cv2
-except ImportError:  # pragma: no cover - reported as a structured processing failure
-    cv2 = None
+# ─────────────────────────────────────────────
+# SETUP
+# ─────────────────────────────────────────────
 
-try:
-    import pytesseract
-    from PIL import Image
-except ImportError:  # pragma: no cover - reported as a structured OCR failure
-    pytesseract = None
-    Image = None
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
-SUPPORTED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif", ".jfif"}
+folder_path = os.path.dirname(os.path.abspath(__file__))
 
+SUPPORTED = ('.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tiff', '.tif', '.jfif')
+
+# ─────────────────────────────────────────────
+# STEP 1: IMAGE CLEANING
+# ─────────────────────────────────────────────
+
+def clean_image(image_path):
+    img = cv2.imread(image_path)
+    img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+    return thresh
+
+# ─────────────────────────────────────────────
+# STEP 2: GROUP IMAGES BY PRODUCT NAME
+# ─────────────────────────────────────────────
+
+def group_images():
+    products = defaultdict(list)
+
+    for filename in os.listdir(folder_path):
+        if not filename.lower().endswith(SUPPORTED):
+            continue
+        if filename.startswith('cleaned_'):
+            continue
+
+        # Split by last underscore to get product name
+        # dettol_front.jpg → product = "dettol", part = "front"
+        name_without_ext = os.path.splitext(filename)[0]
+
+        if '_' in name_without_ext:
+            product_name = '_'.join(name_without_ext.split('_')[:-1])
+        else:
+            # No underscore — treat whole name as product
+            product_name = name_without_ext
+
+        products[product_name].append(filename)
+
+    return products
+
+# ─────────────────────────────────────────────
+# STEP 3: EXTRACT TEXT FROM ALL IMAGES OF ONE PRODUCT
+# ─────────────────────────────────────────────
+
+def extract_merged_text(filenames):
+    merged_text = ""
+
+    for filename in filenames:
+        image_path = os.path.join(folder_path, filename)
+
+        # Clean image
+        cleaned = clean_image(image_path)
+
+        # Save cleaned version
+        clean_path = os.path.join(folder_path, 'cleaned_' + filename)
+        cv2.imwrite(clean_path, cleaned)
+
+        # Extract text
+        text = pytesseract.image_to_string(Image.open(clean_path))
+
+        print(f"    → Extracted from {filename}: {len(text.strip())} characters")
+
+        merged_text += f"\n--- From {filename} ---\n" + text
+
+    return merged_text
+
+# ─────────────────────────────────────────────
+# FASTAPI ADAPTER
+# Connects Member 1's OCR functions to /scan
+# ─────────────────────────────────────────────
 
 class OCRService:
-    def __init__(self, tesseract_cmd: str | None = None, ocr_reader: Callable[[Any], str] | None = None) -> None:
-        self.ocr_reader = ocr_reader
-        if pytesseract is not None and tesseract_cmd:
+    def __init__(self, tesseract_cmd=None):
+        if tesseract_cmd:
             pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
 
-    @staticmethod
-    def clean_image(image_path: str | Path) -> Any:
-        if cv2 is None:
-            raise RuntimeError("OpenCV is not installed")
-        image = cv2.imread(str(image_path))
-        if image is None:
-            raise ValueError("Image could not be opened")
-        image = cv2.resize(image, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        gray = cv2.GaussianBlur(gray, (3, 3), 0)
-        return cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+    def process_images(self, paths):
+        global folder_path
 
-    def extract_text(self, image_path: str | Path) -> str:
-        cleaned = self.clean_image(image_path)
-        return self._read_cleaned(cleaned)
+        if not paths:
+            return {
+                "images": [],
+                "merged_text": "",
+                "extracted_fields": extract_declarations(merged_text),
+            }
 
-    def _read_cleaned(self, cleaned: Any) -> str:
-        if self.ocr_reader is not None:
-            return str(self.ocr_reader(cleaned) or "")
-        if pytesseract is None or Image is None:
-            raise RuntimeError("Tesseract OCR dependencies are not installed")
-        return str(pytesseract.image_to_string(Image.fromarray(cleaned)) or "")
+        original_folder = folder_path
+        folder_path = str(paths[0].parent)
 
-    def process_images(self, image_paths: list[str | Path]) -> dict[str, Any]:
-        sources: list[dict[str, Any]] = []
-        for image_path in image_paths:
-            path = Path(image_path)
-            item: dict[str, Any] = {"source_image": str(path), "filename": path.name, "processing_success": False, "ocr_success": False, "text": "", "error": None}
-            if path.suffix.lower() not in SUPPORTED_SUFFIXES:
-                item["error"] = "Unsupported image format"
-                sources.append(item)
-                continue
-            try:
-                cleaned = self.clean_image(path)
-                item["processing_success"] = True
-                item["text"] = self._read_cleaned(cleaned)
-                item["ocr_success"] = True
-            except Exception as exc:
-                item["error"] = str(exc)
-            sources.append(item)
-        merged = "\n".join(f"--- From {item['filename']} ---\n{item['text']}" for item in sources if item["text"])
-        return {"images": sources, "merged_text": merged, "extracted_fields": extract_declarations(merged)}
+        try:
+            filenames = [path.name for path in paths]
 
+            merged_text = extract_merged_text(filenames)
 
-def extract_declarations(text: str) -> dict[str, Any]:
-    """Extract candidate fields only; the existing rule engine remains authoritative."""
-    fields: dict[str, Any] = {}
-    patterns = {
-        "net_quantity": r"(?:net\s*(?:quantity|wt|weight)|quantity)\s*[:\-]?\s*([0-9]+(?:\.[0-9]+)?\s*(?:kg|g|mg|l|litre|liter|ml))",
-        "mrp": r"(?:m\.?r\.?p\.?|maximum\s*retail\s*price)\s*[:\-]?\s*(?:rs\.?|inr|₹)?\s*([0-9]+(?:\.[0-9]+)?)",
-        "manufacturing_date": r"(?:mfd|manufactured|date\s*of\s*(?:mfg|manufacture|packing))\s*[:\-]?\s*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4}|[0-9]{1,2}[/-][0-9]{4})",
-        "expiry": r"(?:exp|expiry|best\s*before)\s*[:\-]?\s*([^\n]+)",
-        "consumer_contact": r"(?:consumer\s*care|customer\s*care|helpline)\s*[:\-]?\s*([^\n]+)",
-    }
-    for field, pattern in patterns.items():
-        match = re.search(pattern, text or "", re.IGNORECASE)
-        if match:
-            fields[field] = {"value": match.group(1).strip(), "source": "ocr", "confidence": 0.6}
-    manufacturer = re.search(r"(?:manufactured|packed|marketed)\s*by\s*[:\-]?\s*([^\n]+)", text or "", re.IGNORECASE)
-    if manufacturer:
-        fields["manufacturer_name"] = {"value": manufacturer.group(1).strip(), "source": "ocr", "confidence": 0.55}
-    return fields
+            image_results = []
+
+            for path in paths:
+                clean_path = path.parent / ("cleaned_" + path.name)
+
+                text = pytesseract.image_to_string(
+                    Image.open(clean_path)
+                )
+
+                image_results.append({
+                    "file_path": str(path),
+                    "text": text,
+                    "ocr_success": bool(text.strip()),
+                })
+
+            return {
+                "images": image_results,
+                "merged_text": merged_text,
+                "extracted_fields": {},
+            }
+
+        finally:
+            folder_path = original_folder
