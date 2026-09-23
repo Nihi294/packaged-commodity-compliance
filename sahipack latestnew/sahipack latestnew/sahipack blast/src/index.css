@@ -1,0 +1,54 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply font-body text-ink bg-cream antialiased;
+  }
+
+  h1, h2, h3, h4 {
+    @apply font-display;
+  }
+
+  ::selection {
+    background-color: #F6C84A;
+    color: #10223B;
+  }
+
+  :focus-visible {
+    outline: 2px solid #F6C84A;
+    outline-offset: 2px;
+  }
+}
+
+@layer utilities {
+  .eyebrow {
+    @apply font-mono text-xs tracking-[0.18em] uppercase inline-flex items-center gap-2;
+  }
+
+  .grid-overlay-navy {
+    background-image: linear-gradient(rgba(245,241,231,0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(245,241,231,0.06) 1px, transparent 1px);
+    background-size: 44px 44px;
+  }
+
+  .grid-overlay-cream {
+    background-image: linear-gradient(rgba(20,41,67,0.07) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(20,41,67,0.07) 1px, transparent 1px);
+    background-size: 44px 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

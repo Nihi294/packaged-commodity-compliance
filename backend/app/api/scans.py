@@ -108,7 +108,7 @@ async def create_scan(
         "filename": path.name,
     }
     for path in paths
-]))
+    ]))
     scan.status = "assessment_ready"
     db.commit()
     db.refresh(inspection)
